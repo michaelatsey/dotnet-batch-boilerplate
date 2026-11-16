@@ -49,8 +49,8 @@ public interface IJobExecutionStore
     /// <summary>
     /// Passe en <see cref="JobStatus.Abandoned"/> les exécutions restées « Running » pour cette clé.
     /// Appelé une fois le verrou obtenu : si le verrou est libre, leur processus est forcément mort.
+    /// <paramref name="parametersHash"/> à <c>null</c> vise toutes les exécutions du job.
     /// </summary>
-    /// <param name="parametersHash"><c>null</c> pour toutes les exécutions du job.</param>
     Task<int> MarkAbandonedAsync(string jobName, string? parametersHash, DateTimeOffset now, CancellationToken cancellationToken);
 
     Task<JobExecutionRecord?> FindLatestAsync(string jobName, string parametersHash, CancellationToken cancellationToken);
