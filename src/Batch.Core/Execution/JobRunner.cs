@@ -17,10 +17,11 @@ public interface IJobRunner
     Task<RunOutcome> RunAsync(RunRequest request, CancellationToken cancellationToken);
 }
 
-/// <param name="Restart">
-/// Reprend la dernière exécution en échec de ce job avec ces paramètres, depuis son checkpoint.
+/// <summary>Demande d'exécution, identique quel que soit le déclencheur.</summary>
+/// <remarks>
+/// <c>Restart</c> reprend la dernière exécution en échec de ce job avec ces paramètres, depuis son checkpoint.
 /// Si la dernière exécution a réussi : rien à faire, code 0. Si aucune : démarrage à neuf.
-/// </param>
+/// </remarks>
 public sealed record RunRequest(
     string JobName,
     IReadOnlyDictionary<string, string?> Parameters,
