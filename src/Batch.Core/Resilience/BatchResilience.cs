@@ -21,6 +21,10 @@ public sealed class DefaultTransientErrorClassifier : ITransientErrorClassifier
 {
     public bool IsTransient(Exception exception) => exception switch
     {
+        // HttpClient.Timeout : TaskCanceledException causée par un TimeoutException. Ce n'est pas une annulation
+        // demandée, c'est un appel lent : à retenter. (Une vraie annulation du run arrête Polly de toute façon.)
+        TaskCanceledException { InnerException: TimeoutException } => true,
+
         // Jamais retentées : la donnée est fausse ou l'arrêt est demandé.
         BatchFunctionalException or SkippableItemException or OperationCanceledException => false,
 
