@@ -117,13 +117,20 @@ public sealed class ImportInvoicesJob(NpgsqlDataSource dataSource)
             throw Reject(item, $"invalid issue date '{fields[2]}' (expected yyyy-MM-dd)");
         }
 
-        if (!decimal.TryParse(fields[3].Trim(), NumberStyles.Number, CultureInfo.InvariantCulture, out var parsed) || parsed < 0)
+        if (!decimal.TryParse(fields[3].Trim(), NumberStyles.Number, CultureInfo.InvariantCulture, out var amount) || amount < 0)
         {
             throw Reject(item, $"invalid amount '{fields[3]}'");
         }
 
+        // Jamais d'arrondi : un import ne modifie pas un montant financier en silence. Une valeur qui demande
+        // plus de 2 décimales est rejetée (comptée, nommée dans les logs, code 1). Les zéros de remplissage
+        // (10.500) passent : la valeur est identique.
+        if (amount != decimal.Round(amount, 2))
+        {
+            throw Reject(item, $"amount '{fields[3]}' has more than 2 decimals (rejected, not rounded)");
+        }
+
         // Contrôlé ici, pas par la base : un montant hors plage ferait échouer tout le chunk au lieu d'une ligne.
-        var amount = decimal.Round(parsed, 2);
         if (amount > MaxAmount)
         {
             throw Reject(item, $"amount '{fields[3]}' exceeds the column range (max {MaxAmount.ToString(CultureInfo.InvariantCulture)})");

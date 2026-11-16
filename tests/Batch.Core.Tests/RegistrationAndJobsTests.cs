@@ -65,14 +65,40 @@ public sealed class ImportInvoicesProcessingTests
     [Fact]
     public async Task Valid_line_is_parsed()
     {
-        var invoice = await Job.ProcessAsync(new InvoiceLine(2, "INV-1; C-9 ;2026-05-01;1234.567;eur"), Context, Ct);
+        var invoice = await Job.ProcessAsync(new InvoiceLine(2, "INV-1; C-9 ;2026-05-01;1234.56;eur"), Context, Ct);
 
         Assert.NotNull(invoice);
         Assert.Equal("INV-1", invoice.InvoiceNumber);
         Assert.Equal("C-9", invoice.CustomerId);
         Assert.Equal(new DateOnly(2026, 5, 1), invoice.IssueDate);
-        Assert.Equal(1234.57m, invoice.Amount);
+        Assert.Equal(1234.56m, invoice.Amount);
         Assert.Equal("EUR", invoice.Currency);
+    }
+
+    [Theory]
+    [InlineData("10.50", "10.50")]
+    [InlineData("10.5", "10.5")]
+    [InlineData("10", "10")]
+    [InlineData("10.500", "10.50")] // zéros de remplissage : même valeur, rien n'est modifié
+    public async Task Amount_with_at_most_two_decimals_is_kept_exactly(string raw, string expected)
+    {
+        var invoice = await Job.ProcessAsync(new InvoiceLine(2, $"INV-1;C-9;2026-05-01;{raw};EUR"), Context, Ct);
+
+        Assert.Equal(decimal.Parse(expected, System.Globalization.CultureInfo.InvariantCulture), invoice!.Amount);
+    }
+
+    [Theory]
+    [InlineData("10.005")]
+    [InlineData("1234.567")]
+    [InlineData("0.001")]
+    public async Task Amount_with_more_than_two_decimals_is_rejected_not_rounded(string raw)
+    {
+        // Un import ne modifie jamais un montant financier en silence : la ligne est rejetée, comptée et nommée.
+        var error = await Assert.ThrowsAsync<SkippableItemException>(async () =>
+            await Job.ProcessAsync(new InvoiceLine(3, $"INV-1;C-9;2026-05-01;{raw};EUR"), Context, Ct));
+
+        Assert.StartsWith("line 3:", error.Message, StringComparison.Ordinal);
+        Assert.Contains("more than 2 decimals", error.Message, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -89,7 +115,7 @@ public sealed class ImportInvoicesProcessingTests
     [InlineData("INV-1;C-9;2026-05-01;-1;EUR")]         // montant négatif
     [InlineData("INV-1;C-9;2026-05-01;abc;EUR")]        // montant illisible
     [InlineData("INV-1;C-9;2026-05-01;1000000000000.00;EUR")] // hors numeric(14,2) : 13 chiffres entiers
-    [InlineData("INV-1;C-9;2026-05-01;999999999999.995;EUR")] // hors plage une fois arrondi
+    [InlineData("INV-1;C-9;2026-05-01;999999999999.995;EUR")] // 3 décimales, et hors plage si on l'arrondissait
     [InlineData("INV-1;C-9;2026-05-01;10.00;EURO")]     // devise
     [InlineData(";C-9;2026-05-01;10.00;EUR")]           // numéro vide
     public async Task Invalid_line_is_skippable(string raw)
