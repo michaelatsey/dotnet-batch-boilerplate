@@ -1,0 +1,32 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <AssemblyName>batch</AssemblyName>
+    <RootNamespace>Batch.Host</RootNamespace>
+    <Description>Exécutable unique : `batch run` pour les ordonnanceurs externes, `batch serve` pour Quartz.</Description>
+    <!-- Démarrage rapide : critique quand un ordonnanceur lance des centaines de jobs courts par nuit. -->
+    <PublishReadyToRun>true</PublishReadyToRun>
+    <TieredPGO>true</TieredPGO>
+    <ServerGarbageCollector>false</ServerGarbageCollector>
+    <ConcurrentGarbageCollection>false</ConcurrentGarbageCollection>
+    <UserSecretsId>batch-host-boilerplate</UserSecretsId>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../Batch.Core/Batch.Core.csproj" />
+    <ProjectReference Include="../Batch.Infrastructure.PostgreSql/Batch.Infrastructure.PostgreSql.csproj" />
+    <ProjectReference Include="../Batch.Hosting.Quartz/Batch.Hosting.Quartz.csproj" />
+    <ProjectReference Include="../Batch.Jobs/Batch.Jobs.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Extensions.Hosting" />
+    <PackageReference Include="System.CommandLine" />
+    <PackageReference Include="OpenTelemetry.Extensions.Hosting" />
+    <PackageReference Include="OpenTelemetry.Exporter.OpenTelemetryProtocol" />
+  </ItemGroup>
+  <ItemGroup>
+    <Content Include="appsettings*.json" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+  </ItemGroup>
+  <ItemGroup>
+    <InternalsVisibleTo Include="Batch.IntegrationTests" />
+  </ItemGroup>
+</Project>

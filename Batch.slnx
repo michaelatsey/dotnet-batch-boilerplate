@@ -1,0 +1,20 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/Batch.Abstractions/Batch.Abstractions.csproj" />
+    <Project Path="src/Batch.Core/Batch.Core.csproj" />
+    <Project Path="src/Batch.Infrastructure.PostgreSql/Batch.Infrastructure.PostgreSql.csproj" />
+    <Project Path="src/Batch.Hosting.Quartz/Batch.Hosting.Quartz.csproj" />
+    <Project Path="src/Batch.Jobs/Batch.Jobs.csproj" />
+    <Project Path="src/Batch.Host/Batch.Host.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/Batch.Core.Tests/Batch.Core.Tests.csproj" />
+    <Project Path="tests/Batch.IntegrationTests/Batch.IntegrationTests.csproj" />
+  </Folder>
+  <Folder Name="/Solution Items/">
+    <File Path="Directory.Build.props" />
+    <File Path="Directory.Packages.props" />
+    <File Path="global.json" />
+    <File Path="README.md" />
+  </Folder>
+</Solution>

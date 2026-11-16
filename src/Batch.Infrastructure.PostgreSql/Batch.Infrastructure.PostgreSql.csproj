@@ -1,0 +1,19 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <Description>Journal d'exécution (EF Core 10) et verrou distribué (advisory lock) sur PostgreSQL.</Description>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../Batch.Core/Batch.Core.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <PackageReference Include="Npgsql" />
+    <PackageReference Include="Npgsql.EntityFrameworkCore.PostgreSQL" />
+    <PackageReference Include="DistributedLock.Postgres" />
+  </ItemGroup>
+  <ItemGroup>
+    <EmbeddedResource Include="Sql/001_batch_journal.sql" LogicalName="batch-journal.sql" />
+  </ItemGroup>
+  <ItemGroup>
+    <InternalsVisibleTo Include="Batch.IntegrationTests" />
+  </ItemGroup>
+</Project>
