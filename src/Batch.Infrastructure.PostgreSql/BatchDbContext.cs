@@ -24,6 +24,7 @@ public sealed class BatchDbContext(DbContextOptions<BatchDbContext> options) : D
         execution.Property(e => e.JobName).HasColumnName("job_name");
         execution.Property(e => e.ParametersHash).HasColumnName("parameters_hash");
         execution.Property(e => e.ParametersJson).HasColumnName("parameters").HasColumnType("jsonb");
+        execution.Property(e => e.InputIdentity).HasColumnName("input_identity");
         execution.Property(e => e.Trigger).HasColumnName("trigger_source").HasConversion<string>();
         execution.Property(e => e.HostName).HasColumnName("host_name");
         execution.Property(e => e.Status).HasColumnName("status").HasConversion<string>();
@@ -49,6 +50,8 @@ public sealed class JobExecutionEntity
     public string ParametersHash { get; set; } = "";
 
     public string ParametersJson { get; set; } = "{}";
+
+    public string? InputIdentity { get; set; }
 
     public JobTrigger Trigger { get; set; }
 

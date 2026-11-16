@@ -44,6 +44,41 @@ public sealed class PostgresEndToEndTests(PostgresFixture postgres)
     }
 
     [Fact]
+    public async Task Restart_imports_a_new_file_dropped_at_the_same_path()
+    {
+        // Le cas de la CronJob nocturne : toujours le même chemin, toujours --restart.
+        var file = await WriteCsvAsync(
+            "invoice_number;customer_id;issue_date;amount;currency",
+            "T2-0001;C1;2026-01-01;10.00;EUR");
+
+        await using var sp = postgres.BuildServices();
+        var runner = sp.GetRequiredService<IJobRunner>();
+        var request = new RunRequest("import-invoices", new Dictionary<string, string?> { ["InputFile"] = file }, JobTrigger.Test, Restart: true);
+
+        var night1 = await runner.RunAsync(request, Ct);
+        Assert.Equal(ExitCodes.Success, night1.ExitCode);
+
+        // Même fichier toujours présent : rien à refaire.
+        var sameFile = await runner.RunAsync(request, Ct);
+        Assert.Equal(night1.RunId, sameFile.RunId);
+
+        // Nouveau fichier déposé au même chemin : il est importé.
+        await File.WriteAllLinesAsync(
+            file,
+            ["invoice_number;customer_id;issue_date;amount;currency", "T2-0002;C2;2026-01-02;20.00;EUR"],
+            Ct);
+        var night2 = await runner.RunAsync(request, Ct);
+
+        Assert.Equal(ExitCodes.Success, night2.ExitCode);
+        Assert.NotEqual(night1.RunId, night2.RunId);
+        Assert.Equal(1, night2.Counters.Written);
+        Assert.Equal(2, await postgres.ScalarAsync("SELECT count(*) FROM billing.invoice WHERE invoice_number LIKE 'T2-%'"));
+
+        var journal = await sp.GetRequiredService<IJobExecutionStore>().ListRecentAsync("import-invoices", 50, Ct);
+        Assert.StartsWith("sha256:", journal.Single(r => r.RunId == night2.RunId).InputIdentity, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task Missing_input_file_is_a_functional_error()
     {
         await using var sp = postgres.BuildServices();

@@ -9,6 +9,7 @@ batch run <job> [-p Clé=Valeur]... [--restart]
 - Une seule exécution, puis le processus s'arrête avec le code retour du job.
 - Une ligne JSON sur **stdout** résume l'exécution. Tous les logs partent sur **stderr**.
 - `--restart` est toujours sûr : il reprend un échec depuis son checkpoint, ne fait rien si le dernier run a réussi, et démarre à neuf s'il n'y a pas d'historique.
+- « Même exécution » veut dire mêmes paramètres **effectifs** (un défaut omis ou explicite, c'est pareil) et, si le job la déclare, même donnée d'entrée. `import-invoices` déclare l'empreinte SHA-256 de son fichier : un nouveau fichier déposé au même chemin est importé à neuf, jamais repris sur le checkpoint de l'ancien.
 
 ### VTOM (ou Control-M, Autosys)
 

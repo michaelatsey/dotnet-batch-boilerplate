@@ -2,6 +2,7 @@ using System.ComponentModel.DataAnnotations;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using Microsoft.Extensions.Configuration;
 
 namespace Batch.Core.Parameters;
@@ -52,31 +53,23 @@ internal static class ParameterBinder
     }
 }
 
-/// <summary>Empreinte stable d'un jeu de paramètres : clé de verrou, clé de reprise, audit.</summary>
+/// <summary>Empreinte d'un jeu de paramètres : clé de verrou, clé de reprise, audit.</summary>
+/// <remarks>
+/// Calculée sur les valeurs <b>liées</b>, pas sur les chaînes brutes : deux demandes qui veulent dire la même
+/// chose (défaut omis ou explicite, casse des clés, <c>true</c>/<c>True</c>) partagent verrou et reprise.
+/// L'ordre des propriétés est celui de la déclaration du type : stable pour un même binaire.
+/// </remarks>
 internal static class ParameterFingerprint
 {
-    public static SortedDictionary<string, string?> Normalize(IReadOnlyDictionary<string, string?> raw)
+    private static readonly JsonSerializerOptions Options = new()
     {
-        var sorted = new SortedDictionary<string, string?>(StringComparer.Ordinal);
-        foreach (var (key, value) in raw)
-        {
-            sorted[key.ToLowerInvariant()] = value;
-        }
+        Converters = { new JsonStringEnumConverter() },
+    };
 
-        return sorted;
-    }
-
-    public static string Hash(SortedDictionary<string, string?> normalized)
+    public static (string Json, string Hash) Of(object parameters, Type parametersType)
     {
-        var builder = new StringBuilder();
-        foreach (var (key, value) in normalized)
-        {
-            builder.Append(key).Append('=').Append(value).Append('\n');
-        }
-
-        var digest = SHA256.HashData(Encoding.UTF8.GetBytes(builder.ToString()));
-        return Convert.ToHexStringLower(digest, 0, 16);
+        var json = JsonSerializer.Serialize(parameters, parametersType, Options);
+        var digest = SHA256.HashData(Encoding.UTF8.GetBytes(json));
+        return (json, Convert.ToHexStringLower(digest, 0, 16));
     }
-
-    public static string ToJson(SortedDictionary<string, string?> normalized) => JsonSerializer.Serialize(normalized);
 }

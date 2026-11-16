@@ -233,6 +233,33 @@ public sealed class JobRunnerTests
     }
 
     [Fact]
+    public async Task Equivalent_parameter_sets_share_one_fingerprint()
+    {
+        await using var sp = BuildScripted(new ScriptedBehavior());
+        var store = sp.GetRequiredService<IJobExecutionStore>();
+
+        await sp.RunAsync("scripted", new() { ["Name"] = "alice" });
+        await sp.RunAsync("scripted", new() { ["name"] = "alice", ["Count"] = "1", ["Day"] = "Monday" }); // défauts explicites
+        await sp.RunAsync("scripted", new() { ["Name"] = "alice", ["Count"] = "2" });
+
+        var hashes = (await store.ListRecentAsync("scripted", 10, Ct)).OrderBy(r => r.StartedAt).Select(r => r.ParametersHash).ToList();
+        Assert.Equal(hashes[0], hashes[1]);
+        Assert.NotEqual(hashes[0], hashes[2]);
+    }
+
+    [Fact]
+    public async Task Journal_records_the_effective_parameters_including_defaults()
+    {
+        await using var sp = BuildScripted(new ScriptedBehavior());
+
+        await sp.RunAsync("scripted", ValidParameters);
+
+        var record = await sp.SingleExecutionAsync("scripted");
+        Assert.Contains("\"Count\":1", record.ParametersJson, StringComparison.Ordinal);
+        Assert.Null(record.InputIdentity); // ScriptedJob ne déclare pas d'identité d'entrée
+    }
+
+    [Fact]
     public async Task Stale_running_execution_is_marked_abandoned_when_the_lock_is_free()
     {
         await using var sp = BuildScripted(new ScriptedBehavior());

@@ -18,7 +18,8 @@ public sealed class JobDescriptor
         Type parametersType,
         bool isChunked,
         Func<IReadOnlyDictionary<string, string?>, ParameterBindingResult> bind,
-        Func<IServiceProvider, RunInvocation, CancellationToken, Task<JobResult>> execute)
+        Func<IServiceProvider, RunInvocation, CancellationToken, Task<JobResult>> execute,
+        Func<IServiceProvider, object, CancellationToken, ValueTask<string>>? computeInputIdentity)
     {
         Name = name;
         JobType = jobType;
@@ -26,6 +27,7 @@ public sealed class JobDescriptor
         IsChunked = isChunked;
         Bind = bind;
         Execute = execute;
+        ComputeInputIdentity = computeInputIdentity;
     }
 
     public string Name { get; }
@@ -40,6 +42,9 @@ public sealed class JobDescriptor
 
     internal Func<IServiceProvider, RunInvocation, CancellationToken, Task<JobResult>> Execute { get; }
 
+    /// <summary>Non <c>null</c> si le job implémente <see cref="IInputIdentityProvider{TParams}"/>.</summary>
+    internal Func<IServiceProvider, object, CancellationToken, ValueTask<string>>? ComputeInputIdentity { get; }
+
     internal static JobDescriptor ForTask<TJob, TParams>(string name)
         where TJob : class, IBatchJob<TParams>
         where TParams : class, new() =>
@@ -53,7 +58,8 @@ public sealed class JobDescriptor
             {
                 var job = services.GetRequiredService<TJob>();
                 return job.ExecuteAsync(invocation.CreateContext<TParams>(), cancellationToken);
-            });
+            },
+            InputIdentityOf<TJob, TParams>());
 
     internal static JobDescriptor ForChunked<TJob, TParams, TIn, TOut>(string name)
         where TJob : class, IChunkedJob<TParams, TIn, TOut>
@@ -71,5 +77,15 @@ public sealed class JobDescriptor
                 var job = services.GetRequiredService<TJob>();
                 var engine = services.GetRequiredService<ChunkEngine>();
                 return engine.RunAsync<TParams, TIn, TOut>(job, invocation.CreateContext<TParams>(), invocation, cancellationToken);
-            });
+            },
+            InputIdentityOf<TJob, TParams>());
+
+    private static Func<IServiceProvider, object, CancellationToken, ValueTask<string>>? InputIdentityOf<TJob, TParams>()
+        where TJob : class
+        where TParams : class, new() =>
+        typeof(IInputIdentityProvider<TParams>).IsAssignableFrom(typeof(TJob))
+            ? static (services, parameters, cancellationToken) =>
+                ((IInputIdentityProvider<TParams>)services.GetRequiredService<TJob>())
+                    .ComputeInputIdentityAsync((TParams)parameters, cancellationToken)
+            : null;
 }
