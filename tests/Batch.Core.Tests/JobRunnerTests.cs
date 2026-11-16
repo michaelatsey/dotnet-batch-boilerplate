@@ -1,6 +1,8 @@
 using Batch.Abstractions;
+using Batch.Core.Locking;
 using Batch.Core.Persistence;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Time.Testing;
 using static Batch.Core.Tests.TestSupport;
 
@@ -257,6 +259,63 @@ public sealed class JobRunnerTests
         var record = await sp.SingleExecutionAsync("scripted");
         Assert.Contains("\"Count\":1", record.ParametersJson, StringComparison.Ordinal);
         Assert.Null(record.InputIdentity); // ScriptedJob ne déclare pas d'identité d'entrée
+    }
+
+    [Fact]
+    public async Task Unreachable_lock_database_is_a_technical_error()
+    {
+        await using var sp = Build(
+            b => b.AddJob<ScriptedJob, EchoParameters>("scripted"),
+            services: s => s.AddSingleton(new ScriptedBehavior()).Replace(ServiceDescriptor.Singleton<IJobLockProvider, UnreachableLocks>()));
+
+        var outcome = await sp.RunAsync("scripted", ValidParameters);
+
+        // 3 = relance automatique ; surtout pas 1, que l'ordonnanceur lit comme « succès partiel ».
+        Assert.Equal(ExitCodes.TechnicalError, outcome.ExitCode);
+        Assert.Null(outcome.RunId);
+        Assert.Contains("lock database unreachable", outcome.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Unreachable_journal_before_start_is_a_technical_error_and_releases_the_lock()
+    {
+        var store = new FlakyStore { FailCreate = true };
+        await using var sp = Build(
+            b => b.AddJob<ScriptedJob, EchoParameters>("scripted"),
+            services: s => s.AddSingleton(new ScriptedBehavior()).Replace(ServiceDescriptor.Singleton<IJobExecutionStore>(store)));
+
+        var failed = await sp.RunAsync("scripted", ValidParameters);
+        Assert.Equal(ExitCodes.TechnicalError, failed.ExitCode);
+
+        // Le verrou a été rendu : la relance passe, au lieu de répondre « déjà en cours ».
+        store.FailCreate = false;
+        var retried = await sp.RunAsync("scripted", ValidParameters);
+        Assert.Equal(ExitCodes.Success, retried.ExitCode);
+    }
+
+    [Fact]
+    public async Task Cancellation_before_start_returns_cancelled()
+    {
+        await using var sp = BuildScripted(new ScriptedBehavior());
+        using var cts = new CancellationTokenSource();
+        await cts.CancelAsync();
+
+        var outcome = await sp.RunAsync("scripted", ValidParameters, cancellationToken: cts.Token);
+
+        Assert.Equal(ExitCodes.Cancelled, outcome.ExitCode);
+    }
+
+    [Fact]
+    public async Task Job_that_cannot_be_constructed_is_a_configuration_error()
+    {
+        await using var sp = Build(b => b.AddJob<NeedsUnregisteredDependencyJob, EchoParameters>("needs-dep"), validateOnBuild: false);
+
+        var outcome = await sp.RunAsync("needs-dep", ValidParameters);
+
+        // 78 : corriger la configuration, pas relancer en boucle.
+        Assert.Equal(ExitCodes.ConfigurationError, outcome.ExitCode);
+        Assert.Contains(nameof(IUnregisteredDependency), outcome.Message, StringComparison.Ordinal);
+        Assert.Empty(await sp.GetRequiredService<IJobExecutionStore>().ListRecentAsync(null, 10, Ct));
     }
 
     [Fact]

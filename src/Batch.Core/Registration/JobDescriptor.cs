@@ -18,6 +18,7 @@ public sealed class JobDescriptor
         Type parametersType,
         bool isChunked,
         Func<IReadOnlyDictionary<string, string?>, ParameterBindingResult> bind,
+        Func<IServiceProvider, object> createJob,
         Func<IServiceProvider, RunInvocation, CancellationToken, Task<JobResult>> execute,
         Func<IServiceProvider, object, CancellationToken, ValueTask<string>>? computeInputIdentity)
     {
@@ -26,6 +27,7 @@ public sealed class JobDescriptor
         ParametersType = parametersType;
         IsChunked = isChunked;
         Bind = bind;
+        CreateJob = createJob;
         Execute = execute;
         ComputeInputIdentity = computeInputIdentity;
     }
@@ -39,6 +41,9 @@ public sealed class JobDescriptor
     public bool IsChunked { get; }
 
     internal Func<IReadOnlyDictionary<string, string?>, ParameterBindingResult> Bind { get; }
+
+    /// <summary>Construit le job dans un scope : vérifie, avant toute ressource, que ses dépendances existent.</summary>
+    internal Func<IServiceProvider, object> CreateJob { get; }
 
     internal Func<IServiceProvider, RunInvocation, CancellationToken, Task<JobResult>> Execute { get; }
 
@@ -54,6 +59,7 @@ public sealed class JobDescriptor
             typeof(TParams),
             isChunked: false,
             ParameterBinder.Bind<TParams>,
+            static services => services.GetRequiredService<TJob>(),
             static (services, invocation, cancellationToken) =>
             {
                 var job = services.GetRequiredService<TJob>();
@@ -72,6 +78,7 @@ public sealed class JobDescriptor
             typeof(TParams),
             isChunked: true,
             ParameterBinder.Bind<TParams>,
+            static services => services.GetRequiredService<TJob>(),
             static (services, invocation, cancellationToken) =>
             {
                 var job = services.GetRequiredService<TJob>();

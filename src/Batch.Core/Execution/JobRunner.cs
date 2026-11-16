@@ -66,6 +66,16 @@ internal sealed class JobRunner(
             return RunOutcome.Rejected(ExitCodes.InvalidUsage, $"Invalid parameters for '{descriptor.Name}': {reason}");
         }
 
+        // Un job que le conteneur DI ne sait pas construire (chaîne de connexion absente...) est une erreur
+        // de configuration : relancer ne changera rien.
+        if (await CannotConstructAsync(descriptor) is { } constructionError)
+        {
+            RunnerLog.CannotConstruct(logger, constructionError, descriptor.Name);
+            return RunOutcome.Rejected(
+                ExitCodes.ConfigurationError,
+                $"Job '{descriptor.Name}' cannot be created (missing configuration or dependency): {constructionError.Message}");
+        }
+
         var settings = jobOptions.Get(descriptor.Name);
         var (parametersJson, parametersHash) = ParameterFingerprint.Of(binding.Value!, descriptor.ParametersType);
 
@@ -77,14 +87,60 @@ internal sealed class JobRunner(
             _ => null,
         };
 
-        await using var jobLock = lockKey is null ? null : await locks.TryAcquireAsync(lockKey, cancellationToken);
-        if (lockKey is not null && jobLock is null)
+        // Démarrage (verrou, zombies, reprise, journal) : tout passe par l'infrastructure. Une panne ici
+        // doit rester une erreur technique (3), jamais une exception brute que l'hôte traduirait en 1.
+        IJobLock? jobLock = null;
+        try
         {
-            RunnerLog.AlreadyRunning(logger, descriptor.Name, lockKey);
-            metrics.RunRejected(descriptor.Name, "AlreadyRunning");
-            return RunOutcome.Rejected(ExitCodes.AlreadyRunning, $"Job '{descriptor.Name}' is already running ({lockKey}).");
-        }
+            Start start;
+            try
+            {
+                if (lockKey is not null)
+                {
+                    jobLock = await locks.TryAcquireAsync(lockKey, cancellationToken);
+                    if (jobLock is null)
+                    {
+                        RunnerLog.AlreadyRunning(logger, descriptor.Name, lockKey);
+                        metrics.RunRejected(descriptor.Name, "AlreadyRunning");
+                        return RunOutcome.Rejected(ExitCodes.AlreadyRunning, $"Job '{descriptor.Name}' is already running ({lockKey}).");
+                    }
+                }
 
+                start = await StartAsync(descriptor, binding.Value!, settings, request, lockKey, parametersHash, parametersJson, cancellationToken);
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                return RunOutcome.Rejected(ExitCodes.Cancelled, "Cancelled before start.");
+            }
+            catch (Exception ex)
+            {
+                RunnerLog.StartFailed(logger, ex, descriptor.Name);
+                metrics.RunRejected(descriptor.Name, "StartFailed");
+                return RunOutcome.Rejected(
+                    ExitCodes.TechnicalError,
+                    $"Could not start '{descriptor.Name}': {ex.GetType().Name}: {ex.Message}");
+            }
+
+            return start.Early
+                ?? await ExecuteAsync(descriptor, binding.Value!, settings, start.RunId, start.ResumeFrom, request.Trigger, jobLock, cancellationToken);
+        }
+        finally
+        {
+            await ReleaseAsync(jobLock, descriptor.Name);
+        }
+    }
+
+    /// <summary>Zombies, identité de l'entrée, reprise, journal. Appelé verrou détenu.</summary>
+    private async Task<Start> StartAsync(
+        JobDescriptor descriptor,
+        object parameters,
+        BatchJobOptions settings,
+        RunRequest request,
+        string? lockKey,
+        string parametersHash,
+        string parametersJson,
+        CancellationToken cancellationToken)
+    {
         var now = time.GetUtcNow();
 
         // 3. Zombies : verrou libre + exécution « Running » = processus mort sans finaliser.
@@ -99,15 +155,7 @@ internal sealed class JobRunner(
         }
 
         // 4. Identité de la donnée d'entrée : un checkpoint n'a de sens que sur la donnée qui l'a produit.
-        InputIdentity input;
-        try
-        {
-            input = await ResolveInputIdentityAsync(descriptor, binding.Value!, cancellationToken);
-        }
-        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-        {
-            return RunOutcome.Rejected(ExitCodes.Cancelled, "Cancelled before start.");
-        }
+        var input = await ResolveInputIdentityAsync(descriptor, parameters, cancellationToken);
 
         // 5. Reprise.
         JobExecutionRecord? resumeFrom = null;
@@ -124,7 +172,10 @@ internal sealed class JobRunner(
             if (latest is not null && latest.Status.IsSuccessful())
             {
                 RunnerLog.NothingToRestart(logger, descriptor.Name, latest.RunId);
-                return new RunOutcome(ExitCodes.Success, latest.Status, latest.RunId, "Last execution already succeeded; nothing to restart.", latest.Counters);
+                return new Start(
+                    new RunOutcome(ExitCodes.Success, latest.Status, latest.RunId, "Last execution already succeeded; nothing to restart.", latest.Counters),
+                    latest.RunId,
+                    null);
             }
 
             if (latest is not null && latest.Status.IsTerminal())
@@ -152,7 +203,43 @@ internal sealed class JobRunner(
             },
             cancellationToken);
 
-        return await ExecuteAsync(descriptor, binding.Value!, settings, runId, resumeFrom, request.Trigger, jobLock, cancellationToken);
+        return new Start(null, runId, resumeFrom);
+    }
+
+    /// <summary>Issue du démarrage : soit une réponse immédiate (<see cref="Early"/>), soit un run journalisé.</summary>
+    private readonly record struct Start(RunOutcome? Early, Guid RunId, JobExecutionRecord? ResumeFrom);
+
+    private async Task<Exception?> CannotConstructAsync(JobDescriptor descriptor)
+    {
+        try
+        {
+            // Scope asynchrone : un job peut n'implémenter que IAsyncDisposable.
+            await using var scope = scopes.CreateAsyncScope();
+            _ = descriptor.CreateJob(scope.ServiceProvider);
+            return null;
+        }
+        catch (Exception ex) when (ex is InvalidOperationException or ArgumentException)
+        {
+            return ex;
+        }
+    }
+
+    private async Task ReleaseAsync(IJobLock? jobLock, string jobName)
+    {
+        if (jobLock is null)
+        {
+            return;
+        }
+
+        try
+        {
+            await jobLock.DisposeAsync();
+        }
+        catch (Exception ex)
+        {
+            // Le statut est déjà journalisé ; la base libère un verrou advisory à la fermeture de sa connexion.
+            RunnerLog.ReleaseFailed(logger, ex, jobName);
+        }
     }
 
     private async Task<RunOutcome> ExecuteAsync(
@@ -382,6 +469,15 @@ internal static partial class RunnerLog
 
     [LoggerMessage(1010, LogLevel.Error, "Could not write the final status of run {RunId} to the journal.")]
     public static partial void FinalizationFailed(ILogger logger, Exception exception, Guid runId);
+
+    [LoggerMessage(1013, LogLevel.Error, "Job '{JobName}' cannot be created by the DI container (configuration error).")]
+    public static partial void CannotConstruct(ILogger logger, Exception exception, string jobName);
+
+    [LoggerMessage(1014, LogLevel.Error, "Could not start job '{JobName}' (lock or journal unavailable).")]
+    public static partial void StartFailed(ILogger logger, Exception exception, string jobName);
+
+    [LoggerMessage(1015, LogLevel.Warning, "Could not release the lock of job '{JobName}'.")]
+    public static partial void ReleaseFailed(ILogger logger, Exception exception, string jobName);
 
     [LoggerMessage(1011, LogLevel.Warning, "Could not compute the input identity of '{JobName}'; a restart will start fresh instead of resuming.")]
     public static partial void InputIdentityFailed(ILogger logger, Exception exception, string jobName);

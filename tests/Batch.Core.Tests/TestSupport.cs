@@ -2,6 +2,7 @@ using System.ComponentModel.DataAnnotations;
 using System.Runtime.CompilerServices;
 using Batch.Abstractions;
 using Batch.Core.Execution;
+using Batch.Core.Locking;
 using Batch.Core.Persistence;
 using Batch.Core.Registration;
 using Microsoft.Extensions.Configuration;
@@ -18,7 +19,8 @@ internal static class TestSupport
         Action<BatchBuilder> jobs,
         TimeProvider? time = null,
         Dictionary<string, string?>? configuration = null,
-        Action<IServiceCollection>? services = null)
+        Action<IServiceCollection>? services = null,
+        bool validateOnBuild = true)
     {
         var collection = new ServiceCollection();
 
@@ -40,7 +42,7 @@ internal static class TestSupport
         jobs(builder);
         services?.Invoke(collection);
 
-        return collection.BuildServiceProvider(new ServiceProviderOptions { ValidateScopes = true, ValidateOnBuild = true });
+        return collection.BuildServiceProvider(new ServiceProviderOptions { ValidateScopes = true, ValidateOnBuild = validateOnBuild });
     }
 
     public static Task<RunOutcome> RunAsync(
@@ -185,4 +187,54 @@ public sealed class NumbersScript
     public string InputIdentity { get; set; } = "v1";
 
     public Exception? InputIdentityFailure { get; set; }
+}
+
+// ── Pannes d'infrastructure ────────────────────────────────────────────────────
+
+/// <summary>Verrou distribué injoignable (base tombée au moment du lancement).</summary>
+public sealed class UnreachableLocks : IJobLockProvider
+{
+    public ValueTask<IJobLock?> TryAcquireAsync(string key, CancellationToken cancellationToken) =>
+        ValueTask.FromException<IJobLock?>(new TimeoutException("lock database unreachable"));
+}
+
+/// <summary>Journal en mémoire dont la création d'exécution peut échouer à la demande.</summary>
+public sealed class FlakyStore : IJobExecutionStore
+{
+    private readonly InMemoryJobExecutionStore _inner = new();
+
+    public bool FailCreate { get; set; }
+
+    public Task<int> MarkAbandonedAsync(string jobName, string? parametersHash, DateTimeOffset now, CancellationToken cancellationToken) =>
+        _inner.MarkAbandonedAsync(jobName, parametersHash, now, cancellationToken);
+
+    public Task<JobExecutionRecord?> FindLatestAsync(string jobName, string parametersHash, CancellationToken cancellationToken) =>
+        _inner.FindLatestAsync(jobName, parametersHash, cancellationToken);
+
+    public Task CreateAsync(JobExecutionRecord record, CancellationToken cancellationToken) =>
+        FailCreate ? Task.FromException(new TimeoutException("journal unreachable")) : _inner.CreateAsync(record, cancellationToken);
+
+    public Task HeartbeatAsync(Guid runId, JobCounters counters, DateTimeOffset now, CancellationToken cancellationToken) =>
+        _inner.HeartbeatAsync(runId, counters, now, cancellationToken);
+
+    public Task SaveCheckpointAsync(Guid runId, string checkpoint, JobCounters counters, DateTimeOffset now, CancellationToken cancellationToken) =>
+        _inner.SaveCheckpointAsync(runId, checkpoint, counters, now, cancellationToken);
+
+    public Task CompleteAsync(Guid runId, JobStatus status, int exitCode, string? message, JobCounters counters, DateTimeOffset now, CancellationToken cancellationToken) =>
+        _inner.CompleteAsync(runId, status, exitCode, message, counters, now, cancellationToken);
+
+    public Task<IReadOnlyList<JobExecutionRecord>> ListRecentAsync(string? jobName, int take, CancellationToken cancellationToken) =>
+        _inner.ListRecentAsync(jobName, take, cancellationToken);
+
+    public Task<int> PurgeAsync(DateTimeOffset endedBefore, CancellationToken cancellationToken) =>
+        _inner.PurgeAsync(endedBefore, cancellationToken);
+}
+
+/// <summary>Dépendance volontairement non enregistrée : simule une chaîne de connexion absente.</summary>
+public interface IUnregisteredDependency;
+
+public sealed class NeedsUnregisteredDependencyJob(IUnregisteredDependency dependency) : IBatchJob<EchoParameters>
+{
+    public Task<JobResult> ExecuteAsync(JobContext<EchoParameters> context, CancellationToken cancellationToken) =>
+        Task.FromResult(JobResult.Success(dependency.ToString()));
 }
