@@ -37,7 +37,10 @@ public sealed class BatchSchedule
 
     public string Job { get; set; } = "";
 
-    /// <summary>Cron Quartz à 6 ou 7 champs (secondes en tête), ou cron Unix à 5 champs.</summary>
+    /// <summary>
+    /// Cron Quartz à 6 ou 7 champs (secondes en tête, <c>0 30 2 * * ?</c>) ou cron Unix à 5 champs
+    /// (<c>30 2 * * *</c>, jours de semaine 0-7 comme crontab). Une expression invalide bloque le démarrage.
+    /// </summary>
     public string Cron { get; set; } = "";
 
     /// <summary>Identifiant IANA, par exemple <c>Europe/Paris</c>. Défaut : UTC.</summary>
@@ -94,7 +97,7 @@ public static class QuartzHostingExtensions
                 var jobKey = new JobKey(schedule.Name, "batch");
                 var timeZone = schedule.TimeZone is null
                     ? TimeZoneInfo.Utc
-                    : TimeZoneInfo.FindSystemTimeZoneById(schedule.TimeZone);
+                    : TimeZoneInfo.FindSystemTimeZoneById(schedule.TimeZone); // validé plus haut
 
                 q.AddJob<QuartzBatchJob>(job =>
                 {
@@ -109,10 +112,11 @@ public static class QuartzHostingExtensions
                     }
                 });
 
+                var cron = ParseCron(schedule.Cron)!; // validé plus haut
                 q.AddTrigger<QuartzBatchJob>(trigger => trigger
                     .ForJob(jobKey)
                     .WithIdentity($"{schedule.Name}-trigger", "batch")
-                    .WithCronSchedule(schedule.Cron, cron => cron.InTimeZone(timeZone)));
+                    .WithSchedule(CronScheduleBuilder.Create(cron).InTimeZone(timeZone)));
             }
         });
 
@@ -135,6 +139,13 @@ public static class QuartzHostingExtensions
             .ToList();
     }
 
+    /// <summary>Quartz d'abord (6-7 champs), puis Unix (5 champs) : les deux formats ne se recouvrent pas.</summary>
+    /// <remarks>Une instance neuve à chaque appel : <see cref="CronExpression"/> est mutable (fuseau).</remarks>
+    internal static CronExpression? ParseCron(string expression) =>
+        CronExpression.TryParse(expression, CronFormat.Quartz, out var quartz) ? quartz
+        : CronExpression.TryParse(expression, CronFormat.Unix, out var unix) ? unix
+        : null;
+
     private static void Validate(List<BatchSchedule> schedules)
     {
         var errors = new List<string>();
@@ -145,9 +156,21 @@ public static class QuartzHostingExtensions
                 errors.Add($"{BatchSchedule.SectionName}:{schedule.Name}:Job is required.");
             }
 
+            var prefix = $"{BatchSchedule.SectionName}:{schedule.Name}";
             if (string.IsNullOrWhiteSpace(schedule.Cron))
             {
-                errors.Add($"{BatchSchedule.SectionName}:{schedule.Name}:Cron is required.");
+                errors.Add($"{prefix}:Cron is required.");
+            }
+            else if (ParseCron(schedule.Cron) is null)
+            {
+                errors.Add(
+                    $"{prefix}:Cron '{schedule.Cron}' is neither a Quartz cron (6-7 fields, e.g. '0 30 2 * * ?') " +
+                    "nor a Unix cron (5 fields, e.g. '30 2 * * *').");
+            }
+
+            if (schedule.TimeZone is not null && !TimeZoneInfo.TryFindSystemTimeZoneById(schedule.TimeZone, out _))
+            {
+                errors.Add($"{prefix}:TimeZone '{schedule.TimeZone}' is unknown. Use an IANA id, e.g. 'Europe/Paris'.");
             }
         }
 
