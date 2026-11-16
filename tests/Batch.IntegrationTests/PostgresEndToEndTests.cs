@@ -79,6 +79,100 @@ public sealed class PostgresEndToEndTests(PostgresFixture postgres)
     }
 
     [Fact]
+    public async Task Out_of_range_amount_is_skipped_not_a_failed_chunk()
+    {
+        var file = await WriteCsvAsync(
+            "invoice_number;customer_id;issue_date;amount;currency",
+            "T3-0001;C1;2026-01-01;10.00;EUR",
+            "T3-0002;C2;2026-01-02;1000000000000.00;EUR"); // dépasse numeric(14,2)
+
+        await using var sp = postgres.BuildServices();
+        var outcome = await sp.GetRequiredService<IJobRunner>().RunAsync(
+            new RunRequest("import-invoices", new Dictionary<string, string?> { ["InputFile"] = file }, JobTrigger.Test),
+            Ct);
+
+        Assert.Equal(ExitCodes.CompletedWithWarnings, outcome.ExitCode);
+        Assert.Equal(new JobCounters(2, 1, 1), outcome.Counters);
+        Assert.Equal(1, await postgres.ScalarAsync("SELECT count(*) FROM billing.invoice WHERE invoice_number LIKE 'T3-%'"));
+    }
+
+    [Fact]
+    public async Task Data_rejected_by_the_database_is_a_functional_error_not_a_retry_loop()
+    {
+        // Une contrainte que la validation du job ignore (ajoutée par un DBA, par exemple).
+        await postgres.ScalarAsync("ALTER TABLE billing.invoice ADD CONSTRAINT ck_test_forbidden CHECK (customer_id <> 'FORBIDDEN') NOT VALID; SELECT 0");
+        try
+        {
+            var file = await WriteCsvAsync(
+                "invoice_number;customer_id;issue_date;amount;currency",
+                "T4-0001;FORBIDDEN;2026-01-01;10.00;EUR");
+
+            await using var sp = postgres.BuildServices();
+            var outcome = await sp.GetRequiredService<IJobRunner>().RunAsync(
+                new RunRequest("import-invoices", new Dictionary<string, string?> { ["InputFile"] = file }, JobTrigger.Test),
+                Ct);
+
+            // 2 : relancer ne changera rien, il faut corriger la donnée ou la contrainte.
+            Assert.Equal(ExitCodes.FunctionalError, outcome.ExitCode);
+            Assert.Contains("ck_test_forbidden", outcome.Message, StringComparison.Ordinal);
+        }
+        finally
+        {
+            await postgres.ScalarAsync("ALTER TABLE billing.invoice DROP CONSTRAINT ck_test_forbidden; SELECT 0");
+        }
+    }
+
+    [Theory]
+    [InlineData("40P01", true)]  // deadlock_detected : transitoire pour Npgsql, donc retenté
+    [InlineData("08006", true)]  // connection_failure : coupure de connexion, retentée aussi
+    [InlineData("57014", false)] // query_canceled (statement_timeout) : ni donnée ni contrainte
+    public async Task Non_data_database_error_stays_a_technical_error(string sqlState, bool retried)
+    {
+        // Seules les classes 22 (donnée) et 23 (contrainte) deviennent fonctionnelles (2).
+        // Tout le reste garde le code 3, donc la relance automatique de l'ordonnanceur.
+        await postgres.ScalarAsync(
+            """
+            CREATE SEQUENCE IF NOT EXISTS test_write_attempts;
+            CREATE OR REPLACE FUNCTION test_raise_sqlstate() RETURNS trigger LANGUAGE plpgsql AS $$
+            BEGIN
+                PERFORM nextval('test_write_attempts'); -- hors transaction : compte chaque tentative
+                RAISE EXCEPTION 'simulated %', substr(NEW.customer_id, 7) USING ERRCODE = substr(NEW.customer_id, 7);
+            END $$;
+            CREATE TRIGGER test_raise_sqlstate BEFORE INSERT ON billing.invoice
+                FOR EACH ROW WHEN (NEW.customer_id LIKE 'RAISE-%') EXECUTE FUNCTION test_raise_sqlstate();
+            SELECT setval('test_write_attempts', 1, false);
+            """);
+        try
+        {
+            var file = await WriteCsvAsync(
+                "invoice_number;customer_id;issue_date;amount;currency",
+                $"T5-{sqlState};RAISE-{sqlState};2026-01-01;10.00;EUR");
+
+            await using var sp = postgres.BuildServices(new()
+            {
+                ["Batch:Retry:MaxAttempts"] = "2",
+                ["Batch:Retry:BaseDelay"] = "00:00:00.010",
+                ["Batch:Retry:MaxDelay"] = "00:00:00.050",
+            });
+            var outcome = await sp.GetRequiredService<IJobRunner>().RunAsync(
+                new RunRequest("import-invoices", new Dictionary<string, string?> { ["InputFile"] = file }, JobTrigger.Test),
+                Ct);
+
+            Assert.Equal(ExitCodes.TechnicalError, outcome.ExitCode);
+            Assert.Contains(sqlState, outcome.Message, StringComparison.Ordinal);
+
+            // 1 tentative + 2 retries quand l'erreur est transitoire ; 1 seule sinon.
+            var attempts = await postgres.ScalarAsync("SELECT last_value FROM test_write_attempts");
+            Assert.Equal(retried ? 3 : 1, attempts);
+        }
+        finally
+        {
+            await postgres.ScalarAsync(
+                "DROP TRIGGER IF EXISTS test_raise_sqlstate ON billing.invoice; DROP FUNCTION IF EXISTS test_raise_sqlstate(); SELECT 0");
+        }
+    }
+
+    [Fact]
     public async Task Missing_input_file_is_a_functional_error()
     {
         await using var sp = postgres.BuildServices();

@@ -75,11 +75,21 @@ public sealed class ImportInvoicesProcessingTests
         Assert.Equal("EUR", invoice.Currency);
     }
 
+    [Fact]
+    public async Task Largest_amount_of_the_column_is_accepted()
+    {
+        var invoice = await Job.ProcessAsync(new InvoiceLine(2, "INV-1;C-9;2026-05-01;999999999999.99;EUR"), Context, Ct);
+
+        Assert.Equal(999_999_999_999.99m, invoice!.Amount);
+    }
+
     [Theory]
     [InlineData("INV-1;C-9;2026-05-01;10.00")]          // champ manquant
     [InlineData("INV-1;C-9;2026-13-45;10.00;EUR")]      // date invalide
     [InlineData("INV-1;C-9;2026-05-01;-1;EUR")]         // montant négatif
     [InlineData("INV-1;C-9;2026-05-01;abc;EUR")]        // montant illisible
+    [InlineData("INV-1;C-9;2026-05-01;1000000000000.00;EUR")] // hors numeric(14,2) : 13 chiffres entiers
+    [InlineData("INV-1;C-9;2026-05-01;999999999999.995;EUR")] // hors plage une fois arrondi
     [InlineData("INV-1;C-9;2026-05-01;10.00;EURO")]     // devise
     [InlineData(";C-9;2026-05-01;10.00;EUR")]           // numéro vide
     public async Task Invalid_line_is_skippable(string raw)

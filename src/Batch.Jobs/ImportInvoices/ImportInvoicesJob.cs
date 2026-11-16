@@ -37,6 +37,9 @@ public sealed class ImportInvoicesJob(NpgsqlDataSource dataSource)
 {
     private const int ExpectedFields = 5;
 
+    // Plus grand montant de la colonne cible numeric(14,2) : 12 chiffres avant la virgule, 2 après.
+    private const decimal MaxAmount = 999_999_999_999.99m;
+
     // ── Identité de l'entrée ──────────────────────────────────────────────────
     // Le chemin ne suffit pas : un ordonnanceur dépose souvent chaque nuit un nouveau fichier au même endroit.
     // L'empreinte du contenu empêche d'appliquer le checkpoint d'un fichier à un autre, et distingue
@@ -114,9 +117,16 @@ public sealed class ImportInvoicesJob(NpgsqlDataSource dataSource)
             throw Reject(item, $"invalid issue date '{fields[2]}' (expected yyyy-MM-dd)");
         }
 
-        if (!decimal.TryParse(fields[3].Trim(), NumberStyles.Number, CultureInfo.InvariantCulture, out var amount) || amount < 0)
+        if (!decimal.TryParse(fields[3].Trim(), NumberStyles.Number, CultureInfo.InvariantCulture, out var parsed) || parsed < 0)
         {
             throw Reject(item, $"invalid amount '{fields[3]}'");
+        }
+
+        // Contrôlé ici, pas par la base : un montant hors plage ferait échouer tout le chunk au lieu d'une ligne.
+        var amount = decimal.Round(parsed, 2);
+        if (amount > MaxAmount)
+        {
+            throw Reject(item, $"amount '{fields[3]}' exceeds the column range (max {MaxAmount.ToString(CultureInfo.InvariantCulture)})");
         }
 
         var currency = fields[4].Trim().ToUpperInvariant();
@@ -126,7 +136,7 @@ public sealed class ImportInvoicesJob(NpgsqlDataSource dataSource)
         }
 
         return ValueTask.FromResult<Invoice?>(
-            new Invoice(item.LineNumber, invoiceNumber, customerId, issueDate, decimal.Round(amount, 2), currency));
+            new Invoice(item.LineNumber, invoiceNumber, customerId, issueDate, amount, currency));
     }
 
     // ── Écriture : COPY binaire dans une table temporaire, puis upsert ────────
@@ -134,6 +144,29 @@ public sealed class ImportInvoicesJob(NpgsqlDataSource dataSource)
     {
         ArgumentNullException.ThrowIfNull(chunk);
         ArgumentNullException.ThrowIfNull(context);
+
+        try
+        {
+            await WriteChunkAsync(chunk, context, cancellationToken);
+        }
+        catch (PostgresException ex) when (IsDataError(ex))
+        {
+            // La base refuse la donnée (contrainte, plage, format) : rejouer le chunk échouera à l'identique.
+            // Erreur fonctionnelle (2) plutôt que technique (3), sinon chaque --restart reboucle sur ce chunk.
+            var constraint = ex.ConstraintName is { } name ? $", constraint {name}" : "";
+            throw new BatchFunctionalException(
+                $"Chunk of lines {chunk[0].LineNumber}-{chunk[^1].LineNumber} rejected by the database " +
+                $"(SQLSTATE {ex.SqlState}{constraint}): {ex.MessageText}",
+                ex);
+        }
+    }
+
+    /// <summary>Classes SQLSTATE 22 (data exception) et 23 (violation de contrainte d'intégrité).</summary>
+    private static bool IsDataError(PostgresException ex) =>
+        ex.SqlState.StartsWith("22", StringComparison.Ordinal) || ex.SqlState.StartsWith("23", StringComparison.Ordinal);
+
+    private async Task WriteChunkAsync(IReadOnlyList<Invoice> chunk, JobContext<ImportInvoicesParameters> context, CancellationToken cancellationToken)
+    {
 
         await using var connection = await dataSource.OpenConnectionAsync(cancellationToken);
         await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
