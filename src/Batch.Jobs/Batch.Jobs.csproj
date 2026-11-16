@@ -1,0 +1,19 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <Description>Jobs métier. Un dossier par job (vertical slice) : paramètres, lecture, traitement, écriture, schéma.</Description>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../Batch.Core/Batch.Core.csproj" />
+    <ProjectReference Include="../Batch.Infrastructure.PostgreSql/Batch.Infrastructure.PostgreSql.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <PackageReference Include="Npgsql" />
+  </ItemGroup>
+  <ItemGroup>
+    <EmbeddedResource Include="ImportInvoices/invoice_schema.sql" LogicalName="billing-invoice.sql" />
+  </ItemGroup>
+  <ItemGroup>
+    <InternalsVisibleTo Include="Batch.Core.Tests" />
+    <InternalsVisibleTo Include="Batch.IntegrationTests" />
+  </ItemGroup>
+</Project>

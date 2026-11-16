@@ -1,0 +1,45 @@
+# Kubernetes comme ordonnanceur : même image, même contrat de codes retour que VTOM.
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: import-invoices
+spec:
+  schedule: "30 2 * * *"
+  timeZone: "Europe/Paris"
+  concurrencyPolicy: Forbid          # première barrière ; le verrou PostgreSQL reste la garantie
+  startingDeadlineSeconds: 600
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 5
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      podFailurePolicy:
+        rules:
+          # Erreur fonctionnelle (2), déjà en cours (4), usage (64), configuration (78) : relancer est inutile.
+          - action: FailJob
+            onExitCodes:
+              containerName: batch
+              operator: In
+              values: [2, 4, 64, 78]
+      template:
+        spec:
+          restartPolicy: Never
+          terminationGracePeriodSeconds: 75   # > BATCH_TERMINATION_GRACE_SECONDS (60)
+          containers:
+            - name: batch
+              image: ghcr.io/michaelatsey/batch-host:latest
+              args: ["run", "import-invoices", "--restart", "-p", "InputFile=/data/in/invoices.csv"]
+              env:
+                - name: ConnectionStrings__Batch
+                  valueFrom:
+                    secretKeyRef: { name: batch-db, key: connection-string }
+                - name: OTEL_EXPORTER_OTLP_ENDPOINT
+                  value: http://otel-collector.observability:4317
+              resources:
+                requests: { cpu: "500m", memory: "256Mi" }
+                limits: { memory: "512Mi" }
+              volumeMounts:
+                - { name: inbox, mountPath: /data/in, readOnly: true }
+          volumes:
+            - name: inbox
+              persistentVolumeClaim: { claimName: invoices-inbox }

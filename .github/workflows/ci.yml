@@ -1,0 +1,57 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  DOTNET_NOLOGO: true
+  DOTNET_CLI_TELEMETRY_OPTOUT: true
+  CI: true
+
+jobs:
+  build-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          global-json-file: global.json
+
+      - name: Restore
+        run: dotnet restore Batch.slnx
+
+      - name: Build
+        run: dotnet build Batch.slnx --no-restore -c Release
+
+      - name: Unit tests
+        run: dotnet test tests/Batch.Core.Tests/Batch.Core.Tests.csproj --no-build -c Release
+
+      # Docker est disponible sur les runners ubuntu-latest : Testcontainers démarre un PostgreSQL réel.
+      - name: Integration tests
+        run: dotnet test tests/Batch.IntegrationTests/Batch.IntegrationTests.csproj --no-build -c Release
+
+  container:
+    runs-on: ubuntu-latest
+    needs: build-test
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build image
+        run: docker build -t batch-host:ci -f src/Batch.Host/Dockerfile .
+      - name: Smoke test (contrat CLI)
+        run: |
+          docker run --rm batch-host:ci list
+          set +e
+          docker run --rm batch-host:ci run does-not-exist
+          code=$?
+          set -e
+          test "$code" -eq 64 || { echo "exit code attendu 64, obtenu $code"; exit 1; }

@@ -1,0 +1,19 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <Description>Moteur d'exécution : runner, pipeline par chunks, verrou, journal, résilience, télémétrie.</Description>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../Batch.Abstractions/Batch.Abstractions.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Extensions.Hosting.Abstractions" />
+    <PackageReference Include="Microsoft.Extensions.Configuration" />
+    <PackageReference Include="Microsoft.Extensions.Configuration.Binder" />
+    <PackageReference Include="Microsoft.Extensions.Options.ConfigurationExtensions" />
+    <PackageReference Include="Microsoft.Extensions.Diagnostics" />
+    <PackageReference Include="Polly.Extensions" />
+  </ItemGroup>
+  <ItemGroup>
+    <InternalsVisibleTo Include="Batch.Core.Tests" />
+  </ItemGroup>
+</Project>
