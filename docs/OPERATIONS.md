@@ -101,17 +101,8 @@ GROUP BY job_name;
 
 Le job `purge-executions` (planifié par défaut à 03:15 Europe/Paris en mode `serve`) nettoie le journal au-delà de `RetentionDays`.
 
-## Points à vérifier au premier build
-
-Ce socle a été écrit sans SDK .NET ni accès à nuget.org. Les API suivantes sont récentes et ont été vérifiées dans leur documentation, mais pas compilées :
-
-| API | Fichier | Source consultée |
-|---|---|---|
-| Quartz 4 : `IJob.Execute(ctx, ct)` en `ValueTask`, `builder.AddQuartz`, `AddQuartzHostedService` | `Batch.Hosting.Quartz` | Doc Quartz.NET 4.x, API reference |
-| Quartz 4.4 : `JobRunReport.Succeeded/Skipped/Failed`, `.With(...)` | `QuartzBatchJob.cs` | Article sur Quartz 4.4 (Failed déduit des quatre résultats décrits) |
-| Quartz 4 : `UsePostgres`, `UseClustering`, `ConfigureStore`, `ProvisionSchema` | `QuartzHostingExtensions.cs` | Doc Quartz.NET 4.x |
-| System.CommandLine 2.0 : `SetAction`, `InvocationConfiguration.ProcessTerminationTimeout` | `Program.cs`, `CliCommands.cs` | Microsoft Learn |
-| EF Core 10 : `ExecuteUpdateAsync` | `EfJobExecutionStore.cs` | — |
-| Testcontainers 4.16 : `new PostgreSqlBuilder(image)` | `PostgresFixture.cs` | Doc Testcontainers |
+## Qualité
 
 `TreatWarningsAsErrors` n'est actif qu'en CI (`CI=true`) : en local, un avertissement ne bloque pas l'exploration.
+
+La CI compile en `Release`, exécute les tests unitaires puis les tests d'intégration (PostgreSQL via Testcontainers), construit l'image Docker et vérifie le contrat CLI.
