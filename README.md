@@ -138,4 +138,4 @@ git add global.json src/Batch.Host/Dockerfile '**/packages.lock.json'
 
 ## État
 
-La CI GitHub Actions compile la solution en `Release` avec les avertissements traités en erreurs (0 avertissement). Elle exécute 37 tests unitaires et 8 tests d'intégration sur un PostgreSQL 17 réel (Testcontainers), puis construit l'image Docker et vérifie le contrat CLI (`list`, code 64 sur un job inconnu).
+La CI GitHub Actions compile la solution en `Release` avec les avertissements traités en erreurs (0 avertissement). Elle exécute 70 tests unitaires et 25 tests d'intégration sur un PostgreSQL 17 réel (Testcontainers), puis construit l'image Docker et vérifie le contrat CLI (`list`, code 64 sur un job inconnu).
