@@ -7,7 +7,8 @@ CREATE TABLE IF NOT EXISTS batch.job_execution (
     run_id            uuid        PRIMARY KEY,                -- UUID v7 : trié chronologiquement
     job_name          text        NOT NULL,
     parameters_hash   text        NOT NULL,                   -- clé de verrou et de reprise
-    parameters        jsonb       NOT NULL,                   -- audit : paramètres normalisés
+    parameters        jsonb       NOT NULL,                   -- audit : paramètres effectifs (défauts inclus)
+    input_identity    text        NULL,                       -- empreinte de la donnée d'entrée (fichier...)
     trigger_source    text        NOT NULL,                   -- Cli | Quartz | Test
     host_name         text        NOT NULL,
     status            text        NOT NULL,

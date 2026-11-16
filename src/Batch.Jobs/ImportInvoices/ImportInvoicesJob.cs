@@ -1,6 +1,7 @@
 using System.ComponentModel.DataAnnotations;
 using System.Globalization;
 using System.Runtime.CompilerServices;
+using System.Security.Cryptography;
 using Batch.Abstractions;
 using Npgsql;
 using NpgsqlTypes;
@@ -32,9 +33,27 @@ public sealed record Invoice(long LineNumber, string InvoiceNumber, string Custo
 /// lecture en flux reprenable, validation avec rejets bornés, écriture bulk idempotente.
 /// </summary>
 public sealed class ImportInvoicesJob(NpgsqlDataSource dataSource)
-    : IChunkedJob<ImportInvoicesParameters, InvoiceLine, Invoice>
+    : IChunkedJob<ImportInvoicesParameters, InvoiceLine, Invoice>, IInputIdentityProvider<ImportInvoicesParameters>
 {
     private const int ExpectedFields = 5;
+
+    // ── Identité de l'entrée ──────────────────────────────────────────────────
+    // Le chemin ne suffit pas : un ordonnanceur dépose souvent chaque nuit un nouveau fichier au même endroit.
+    // L'empreinte du contenu empêche d'appliquer le checkpoint d'un fichier à un autre, et distingue
+    // « même fichier, déjà importé » de « nouveau fichier ». Coût : une lecture séquentielle de plus.
+    public async ValueTask<string> ComputeInputIdentityAsync(ImportInvoicesParameters parameters, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(parameters);
+        await using var stream = new FileStream(
+            parameters.InputFile,
+            FileMode.Open,
+            FileAccess.Read,
+            FileShare.Read,
+            bufferSize: 1 << 16,
+            FileOptions.Asynchronous | FileOptions.SequentialScan);
+        var digest = await SHA256.HashDataAsync(stream, cancellationToken);
+        return "sha256:" + Convert.ToHexStringLower(digest);
+    }
 
     // ── Lecture ────────────────────────────────────────────────────────────────
     public async IAsyncEnumerable<InvoiceLine> ReadAsync(

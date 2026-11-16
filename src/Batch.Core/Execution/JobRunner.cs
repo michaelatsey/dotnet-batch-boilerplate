@@ -67,8 +67,7 @@ internal sealed class JobRunner(
         }
 
         var settings = jobOptions.Get(descriptor.Name);
-        var normalized = ParameterFingerprint.Normalize(request.Parameters);
-        var parametersHash = ParameterFingerprint.Hash(normalized);
+        var (parametersJson, parametersHash) = ParameterFingerprint.Of(binding.Value!, descriptor.ParametersType);
 
         // 2. Concurrence : un verrou distribué, pas une convention d'ordonnancement.
         var lockKey = settings.Concurrency switch
@@ -99,11 +98,29 @@ internal sealed class JobRunner(
             }
         }
 
-        // 4. Reprise.
+        // 4. Identité de la donnée d'entrée : un checkpoint n'a de sens que sur la donnée qui l'a produit.
+        InputIdentity input;
+        try
+        {
+            input = await ResolveInputIdentityAsync(descriptor, binding.Value!, cancellationToken);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            return RunOutcome.Rejected(ExitCodes.Cancelled, "Cancelled before start.");
+        }
+
+        // 5. Reprise.
         JobExecutionRecord? resumeFrom = null;
         if (request.Restart)
         {
             var latest = await store.FindLatestAsync(descriptor.Name, parametersHash, cancellationToken);
+            if (latest is not null && !input.Matches(latest.InputIdentity))
+            {
+                // Mêmes paramètres, autre donnée (nouveau fichier au même chemin) : ni reprise, ni « déjà fait ».
+                RunnerLog.InputChanged(logger, descriptor.Name, latest.RunId, latest.Status);
+                latest = null;
+            }
+
             if (latest is not null && latest.Status.IsSuccessful())
             {
                 RunnerLog.NothingToRestart(logger, descriptor.Name, latest.RunId);
@@ -116,7 +133,7 @@ internal sealed class JobRunner(
             }
         }
 
-        // 5. Journal : l'exécution existe avant de commencer.
+        // 6. Journal : l'exécution existe avant de commencer.
         var runId = Guid.CreateVersion7(now);
         await store.CreateAsync(
             new JobExecutionRecord
@@ -124,7 +141,8 @@ internal sealed class JobRunner(
                 RunId = runId,
                 JobName = descriptor.Name,
                 ParametersHash = parametersHash,
-                ParametersJson = ParameterFingerprint.ToJson(normalized),
+                ParametersJson = parametersJson,
+                InputIdentity = input.Value,
                 Trigger = request.Trigger,
                 HostName = Environment.MachineName,
                 StartedAt = now,
@@ -162,7 +180,7 @@ internal sealed class JobRunner(
         activity?.SetTag("batch.trigger", trigger.ToString());
         activity?.SetTag("batch.restart_of", resumeFrom?.RunId.ToString());
 
-        // 6. Annulation : arrêt de l'hôte, timeout du job, ou perte du verrou distribué.
+        // 7. Annulation : arrêt de l'hôte, timeout du job, ou perte du verrou distribué.
         using var timeoutCts = settings.Timeout is { } timeout
             ? new CancellationTokenSource(timeout, time)
             : new CancellationTokenSource();
@@ -242,7 +260,7 @@ internal sealed class JobRunner(
         var exitCode = ExitCodes.From(status);
         var elapsed = time.GetElapsedTime(startedAt);
 
-        // 7. Finalisation : jamais avec le jeton annulé, sinon le statut final ne serait jamais écrit.
+        // 8. Finalisation : jamais avec le jeton annulé, sinon le statut final ne serait jamais écrit.
         using (var finalizeCts = new CancellationTokenSource(options.Value.FinalizationTimeout, time))
         {
             try
@@ -265,6 +283,39 @@ internal sealed class JobRunner(
 
         RunnerLog.Completed(logger, descriptor.Name, runId, status, exitCode, elapsed.TotalSeconds, counters.Read, counters.Written, counters.Skipped, message);
         return new RunOutcome(exitCode, status, runId, message, counters);
+    }
+
+    private async Task<InputIdentity> ResolveInputIdentityAsync(JobDescriptor descriptor, object parameters, CancellationToken cancellationToken)
+    {
+        if (descriptor.ComputeInputIdentity is null)
+        {
+            return InputIdentity.NotDeclared;
+        }
+
+        try
+        {
+            await using var scope = scopes.CreateAsyncScope();
+            return InputIdentity.Known(await descriptor.ComputeInputIdentity(scope.ServiceProvider, parameters, cancellationToken));
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException || !cancellationToken.IsCancellationRequested)
+        {
+            // Sans preuve que la donnée est la même, on ne reprend pas : l'erreur réelle remontera de la lecture.
+            RunnerLog.InputIdentityFailed(logger, ex, descriptor.Name);
+            return InputIdentity.Unknown;
+        }
+    }
+
+    /// <summary>Résultat du calcul d'identité : non déclarée, connue, ou impossible à établir.</summary>
+    private readonly record struct InputIdentity(string? Value, bool IsUnknown)
+    {
+        public static InputIdentity NotDeclared => default;
+
+        public static InputIdentity Unknown => new(null, IsUnknown: true);
+
+        public static InputIdentity Known(string value) => new(value, IsUnknown: false);
+
+        /// <summary>Une identité inconnue ne correspond à rien, pas même à une autre identité inconnue.</summary>
+        public bool Matches(string? previous) => !IsUnknown && string.Equals(Value, previous, StringComparison.Ordinal);
     }
 
     private async Task HeartbeatLoopAsync(Guid runId, JobProgress progress, CancellationToken cancellationToken)
@@ -331,4 +382,11 @@ internal static partial class RunnerLog
 
     [LoggerMessage(1010, LogLevel.Error, "Could not write the final status of run {RunId} to the journal.")]
     public static partial void FinalizationFailed(ILogger logger, Exception exception, Guid runId);
+
+    [LoggerMessage(1011, LogLevel.Warning, "Could not compute the input identity of '{JobName}'; a restart will start fresh instead of resuming.")]
+    public static partial void InputIdentityFailed(ILogger logger, Exception exception, string jobName);
+
+    [LoggerMessage(1012, LogLevel.Warning,
+        "Input of '{JobName}' changed since run {RunId} ({Status}): starting fresh instead of resuming or skipping.")]
+    public static partial void InputChanged(ILogger logger, string jobName, Guid runId, JobStatus status);
 }

@@ -28,6 +28,9 @@ spec:
           containers:
             - name: batch
               image: ghcr.io/michaelatsey/batch-host:latest
+              # Chemin fixe + --restart est sûr : le job journalise l'empreinte SHA-256 du fichier.
+              # Nouveau fichier → nouvel import ; même fichier déjà importé → rien à faire (code 0) ;
+              # même fichier après un échec → reprise depuis le checkpoint.
               args: ["run", "import-invoices", "--restart", "-p", "InputFile=/data/in/invoices.csv"]
               env:
                 - name: ConnectionStrings__Batch

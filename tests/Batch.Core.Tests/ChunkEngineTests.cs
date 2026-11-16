@@ -126,6 +126,77 @@ public sealed class ChunkEngineTests
     }
 
     [Fact]
+    public async Task Restart_starts_fresh_when_the_input_changed_since_the_failed_run()
+    {
+        var script = new NumbersScript { CrashAt = 25 };
+        await using var sp = BuildNumbers(script);
+
+        await sp.RunAsync("numbers", Count(50));
+
+        // Un autre fichier a été déposé au même chemin : le checkpoint « 20 » ne veut plus rien dire.
+        script.CrashAt = null;
+        script.InputIdentity = "v2";
+        var restarted = await sp.RunAsync("numbers", Count(50), restart: true);
+
+        Assert.Equal(ExitCodes.Success, restarted.ExitCode);
+        Assert.Null(script.ResumeAfter);
+        Assert.Equal(50, restarted.Counters.Written);
+
+        var journal = await sp.GetRequiredService<Batch.Core.Persistence.IJobExecutionStore>().ListRecentAsync("numbers", 10, Ct);
+        var latest = journal.Single(r => r.RunId == restarted.RunId);
+        Assert.Equal("v2", latest.InputIdentity);
+        Assert.Null(latest.RestartOf);
+    }
+
+    [Fact]
+    public async Task Restart_after_success_runs_again_when_the_input_changed()
+    {
+        var script = new NumbersScript();
+        await using var sp = BuildNumbers(script);
+
+        await sp.RunAsync("numbers", Count(10));
+        script.InputIdentity = "v2";
+        var again = await sp.RunAsync("numbers", Count(10), restart: true);
+
+        Assert.Equal(ExitCodes.Success, again.ExitCode);
+        Assert.NotNull(again.RunId);
+        Assert.Equal(20, script.Written.Count);
+    }
+
+    [Fact]
+    public async Task Restart_starts_fresh_when_the_input_identity_cannot_be_computed()
+    {
+        var script = new NumbersScript { CrashAt = 25 };
+        await using var sp = BuildNumbers(script);
+
+        await sp.RunAsync("numbers", Count(50));
+
+        // Sans preuve que l'entrée est la même, on ne reprend pas : rejouer est sûr, sauter des lignes ne l'est pas.
+        script.CrashAt = null;
+        script.InputIdentityFailure = new IOException("NFS hiccup");
+        var restarted = await sp.RunAsync("numbers", Count(50), restart: true);
+
+        Assert.Equal(ExitCodes.Success, restarted.ExitCode);
+        Assert.Null(script.ResumeAfter);
+        Assert.Equal(50, restarted.Counters.Written);
+    }
+
+    [Fact]
+    public async Task Restart_finds_the_failed_run_when_a_default_is_spelled_out()
+    {
+        var script = new NumbersScript { CrashAt = 25 };
+        await using var sp = BuildNumbers(script);
+
+        await sp.RunAsync("numbers"); // Count = 100 par défaut
+
+        script.CrashAt = null;
+        var resumed = await sp.RunAsync("numbers", Count(100), restart: true);
+
+        Assert.Equal(ExitCodes.Success, resumed.ExitCode);
+        Assert.Equal("20", script.ResumeAfter);
+    }
+
+    [Fact]
     public async Task Transient_write_failure_is_retried()
     {
         var script = new NumbersScript { FailWriteOnce = new TimeoutException("db timeout") };

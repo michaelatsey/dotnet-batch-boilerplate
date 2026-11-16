@@ -93,8 +93,14 @@ public sealed class RangeParameters
 }
 
 /// <summary>Job par chunks sur une séquence d'entiers 1..Count, avec points d'injection de pannes.</summary>
-public sealed class NumbersJob(NumbersScript script) : IChunkedJob<RangeParameters, int, NumberRow>
+public sealed class NumbersJob(NumbersScript script)
+    : IChunkedJob<RangeParameters, int, NumberRow>, IInputIdentityProvider<RangeParameters>
 {
+    public ValueTask<string> ComputeInputIdentityAsync(RangeParameters parameters, CancellationToken cancellationToken) =>
+        script.InputIdentityFailure is { } failure
+            ? ValueTask.FromException<string>(failure)
+            : ValueTask.FromResult(script.InputIdentity);
+
     public async IAsyncEnumerable<int> ReadAsync(
         JobContext<RangeParameters> context,
         string? resumeAfter,
@@ -174,4 +180,9 @@ public sealed class NumbersScript
     public TimeSpan? Delay { get; set; }
 
     public string? ResumeAfter { get; set; }
+
+    /// <summary>Identité de la « source » : la changer simule un nouveau fichier déposé au même chemin.</summary>
+    public string InputIdentity { get; set; } = "v1";
+
+    public Exception? InputIdentityFailure { get; set; }
 }

@@ -13,6 +13,12 @@ public sealed record JobExecutionRecord
 
     public required string ParametersJson { get; init; }
 
+    /// <summary>
+    /// Identité de la donnée d'entrée (voir <see cref="IInputIdentityProvider{TParams}"/>).
+    /// <c>null</c> si le job n'en déclare pas, ou si elle n'a pas pu être calculée.
+    /// </summary>
+    public string? InputIdentity { get; init; }
+
     public required JobTrigger Trigger { get; init; }
 
     public required string HostName { get; init; }

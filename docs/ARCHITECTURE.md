@@ -277,6 +277,15 @@ Il offre « au moins une fois » plus une écriture idempotente, ce qui revient 
 | Dernière exécution en échec, annulée, en timeout, abandonnée | Reprise depuis son checkpoint |
 | Dernière exécution réussie | Rien à faire, code 0 |
 | Aucune exécution | Démarrage à neuf |
+| Donnée d'entrée différente, ou impossible à identifier | Démarrage à neuf |
+
+« Dernière exécution » se cherche par job et empreinte des paramètres **liés** (défauts inclus), pas des chaînes brutes.
+
+Les paramètres ne suffisent pas toujours à désigner la donnée : un fichier déposé chaque nuit au même chemin garde le même `InputFile`.
+
+Un job peut donc déclarer l'identité de son entrée (`IInputIdentityProvider<TParams>`), journalisée à chaque run.
+
+Un checkpoint n'est appliqué qu'à la donnée qui l'a produit. Sinon le run repart de zéro, ce que l'écriture idempotente rend sûr.
 
 L'ordonnanceur peut donc toujours relancer avec `--restart` : c'est sans risque.
 
