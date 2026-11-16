@@ -1,0 +1,13 @@
+<Project>
+  <!-- Hérite des réglages communs du dépôt. -->
+  <Import Project="$([MSBuild]::GetPathOfFileAbove('Directory.Build.props', '$(MSBuildThisFileDirectory)../'))" />
+
+  <PropertyGroup>
+    <!--
+      Projets livrés dans l'image : leurs lockfiles NuGet couvrent aussi les runtimes de l'image.
+      Sans cela, le restore du Dockerfile (`-a $TARGETARCH`, spécifique au runtime) ne peut pas tourner
+      en mode verrouillé (NU1004). À garder aligné avec les plateformes construites par le Dockerfile.
+    -->
+    <RuntimeIdentifiers>linux-x64;linux-arm64</RuntimeIdentifiers>
+  </PropertyGroup>
+</Project>

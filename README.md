@@ -35,6 +35,7 @@ Le code métier ne change pas d'une ligne.
 | Arrêt propre | SIGTERM ▸ annulation ▸ fin du chunk ▸ checkpoint ▸ statut ▸ code 5 |
 | Observabilité | Journal SQL, traces et métriques OpenTelemetry, logs structurés avec `run_id` |
 | Évolution | Un dossier par job, configuration surchargeable par l'exploitation sans redéploiement |
+| Chaîne d'approvisionnement | Lockfiles NuGet versionnés, restore verrouillé en CI et dans l'image, audit NuGet des vulnérabilités |
 
 ## Démarrage rapide
 
@@ -123,6 +124,17 @@ Choix et compromis : [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) et [docs/adr](
 .NET 10 · C# 14 · System.CommandLine 2.0 · Quartz.NET 4.7 · EF Core 10 + Npgsql 10 · DistributedLock.Postgres · Polly 8 · OpenTelemetry · xUnit v3 · Testcontainers · Central Package Management · `.slnx`
 
 Versions relevées sur nuget.org le 16/11/2026 et centralisées dans `Directory.Packages.props`. Dependabot propose les montées de version.
+
+Les dépendances transitives sont figées par des lockfiles NuGet (`packages.lock.json`, versionnés). La CI et le Dockerfile restaurent en mode verrouillé : un paquet qui dérive fait échouer le build au lieu d'entrer en silence dans l'image. Après une modification de `Directory.Packages.props`, lancer `dotnet restore Batch.slnx` et commiter les lockfiles mis à jour. Les projets livrés (`src/`) déclarent les runtimes de l'image (`linux-x64`, `linux-arm64`) dans `src/Directory.Build.props`, pour que le restore spécifique au runtime du Dockerfile reste verrouillable.
+
+Le SDK est figé (`global.json`, `rollForward: disable`) parce que les lockfiles en dépendent : il ajoute implicitement des paquets à sa propre version (`Microsoft.NET.ILLink.Tasks`, analyseurs AOT). Monter le SDK se fait en une seule PR :
+
+```bash
+# 1. global.json : "version": "<nouvelle version>"
+# 2. src/Batch.Host/Dockerfile : FROM mcr.microsoft.com/dotnet/sdk:<nouvelle version>
+dotnet restore Batch.slnx --force-evaluate   # 3. régénère les lockfiles avec le nouveau SDK
+git add global.json src/Batch.Host/Dockerfile '**/packages.lock.json'
+```
 
 ## État
 
