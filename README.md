@@ -126,4 +126,4 @@ Versions relevées sur nuget.org le 16/11/2026 et centralisées dans `Directory.
 
 ## État
 
-Ce dépôt a été écrit sans accès à un SDK .NET ni à nuget.org. Il n'a donc **pas encore été compilé**. La CI GitHub Actions (build, tests unitaires, tests d'intégration Testcontainers, image Docker, smoke test du contrat CLI) est la première vérification. Les points d'API récents à surveiller sont listés dans [docs/OPERATIONS.md](docs/OPERATIONS.md#points-à-vérifier-au-premier-build).
+La CI GitHub Actions compile la solution en `Release` avec les avertissements traités en erreurs (0 avertissement). Elle exécute 37 tests unitaires et 8 tests d'intégration sur un PostgreSQL 17 réel (Testcontainers), puis construit l'image Docker et vérifie le contrat CLI (`list`, code 64 sur un job inconnu).
