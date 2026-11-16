@@ -1,0 +1,13 @@
+# Artefacts de build locaux : un obj/ copié écraserait le restore fait dans l'image
+# (project.assets.json pointant vers le cache NuGet de la machine hôte).
+**/bin/
+**/obj/
+
+# Ni historique, ni réglages d'IDE, ni sorties locales dans le contexte de build.
+.git/
+.github/
+.vs/
+.vscode/
+.idea/
+**/*.user
+**/TestResults/
