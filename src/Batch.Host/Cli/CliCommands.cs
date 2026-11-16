@@ -194,6 +194,16 @@ internal static class CliCommands
                 await Console.Error.WriteLineAsync($"Configuration error: {string.Join("; ", ex.Failures)}");
                 return ExitCodes.ConfigurationError;
             }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                return ExitCodes.Cancelled;
+            }
+            catch (Exception ex)
+            {
+                // Typiquement : JobStore Quartz clusterisé injoignable au démarrage de `serve`.
+                await Console.Error.WriteLineAsync($"Technical error while starting: {ex.GetType().Name}: {ex.Message}");
+                return ExitCodes.TechnicalError;
+            }
 
             // Double sécurité : l'arrêt de l'hôte (SIGTERM capté par sa ConsoleLifetime) annule aussi la commande.
             var lifetime = host.Services.GetRequiredService<IHostApplicationLifetime>();
@@ -203,12 +213,35 @@ internal static class CliCommands
             {
                 return await action(host, linked.Token);
             }
+            catch (OperationCanceledException) when (linked.IsCancellationRequested)
+            {
+                return ExitCodes.Cancelled;
+            }
+            catch (Exception ex)
+            {
+                // `history`, `db init`... contre une base tombée : erreur technique, relance possible.
+                await Console.Error.WriteLineAsync($"Technical error: {ex.GetType().Name}: {ex.Message}");
+                return ExitCodes.TechnicalError;
+            }
             finally
             {
-                // Arrêt avec un jeton neuf : vide les exporteurs OpenTelemetry même après annulation.
-                using var stopCts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
-                await host.StopAsync(stopCts.Token);
+                await StopAsync(host);
             }
+        }
+    }
+
+    /// <summary>Arrêt avec un jeton neuf : vide les exporteurs OpenTelemetry même après annulation.</summary>
+    /// <remarks>Ne lève jamais : une exception ici écraserait le code retour déjà calculé.</remarks>
+    private static async Task StopAsync(IHost host)
+    {
+        try
+        {
+            using var stopCts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+            await host.StopAsync(stopCts.Token);
+        }
+        catch (Exception ex)
+        {
+            await Console.Error.WriteLineAsync($"Warning: host shutdown failed: {ex.GetType().Name}: {ex.Message}");
         }
     }
 
