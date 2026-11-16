@@ -304,7 +304,7 @@ internal sealed class JobRunner(
             status = result.Status.IsTerminal() ? result.Status : JobStatus.Succeeded;
             message = result.Summary ?? status.ToString();
 
-            // Des rejets, même tolérés, méritent un signal à l'exploitation.
+            // Des rejets, même tolérés, méritent un signal à l'exploitation. Seul endroit où cette règle se décide.
             if (status == JobStatus.Succeeded && progress.Snapshot().Skipped > 0)
             {
                 status = JobStatus.CompletedWithWarnings;

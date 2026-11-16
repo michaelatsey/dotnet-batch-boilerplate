@@ -262,6 +262,24 @@ public sealed class JobRunnerTests
     }
 
     [Fact]
+    public async Task Task_job_reporting_skipped_items_completes_with_warnings()
+    {
+        var behavior = new ScriptedBehavior
+        {
+            Run = (ctx, _) =>
+            {
+                ctx.Progress.AddSkipped(2);
+                return Task.FromResult(JobResult.Success());
+            },
+        };
+        await using var sp = BuildScripted(behavior);
+
+        var outcome = await sp.RunAsync("scripted", ValidParameters);
+
+        Assert.Equal(ExitCodes.CompletedWithWarnings, outcome.ExitCode);
+    }
+
+    [Fact]
     public async Task Unreachable_lock_database_is_a_technical_error()
     {
         await using var sp = Build(

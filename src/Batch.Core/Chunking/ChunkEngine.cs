@@ -40,9 +40,9 @@ internal sealed class ChunkEngine(ResiliencePipelineProvider<string> pipelines, 
 
         await run.ExecuteAsync(cancellationToken);
 
+        // Le statut « avec avertissements » se décide dans JobRunner, pour tous les types de jobs.
         var counters = context.Progress.Snapshot();
-        var summary = $"Read {counters.Read}, written {counters.Written}, skipped {counters.Skipped}.";
-        return counters.Skipped > 0 ? JobResult.CompletedWithWarnings(summary) : JobResult.Success(summary);
+        return JobResult.Success($"Read {counters.Read}, written {counters.Written}, skipped {counters.Skipped}.");
     }
 }
 
