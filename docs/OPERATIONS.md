@@ -75,11 +75,15 @@ Toute option se surcharge par variable d'environnement (`:` devient `__`), avec 
 | `Batch:Jobs:<job>:Concurrency` | `SingleInstancePerParameters` | `SingleInstance`, `SingleInstancePerParameters`, `Unrestricted` |
 | `Batch:Quartz:Store` | `Memory` | `Postgres` pour un cluster Quartz |
 | `Batch:Quartz:ProvisionSchema` | `false` | Création des tables Quartz (développement) |
-| `Batch:Schedules:<nom>` | — | `Job`, `Cron`, `TimeZone`, `Parameters` |
+| `Batch:Schedules:<nom>` | — | `Job`, `Cron` (Quartz 6-7 champs ou Unix 5 champs), `TimeZone` (IANA), `Parameters` |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | vide | Active l'export OpenTelemetry |
 | `BATCH_TERMINATION_GRACE_SECONDS` | `60` | Délai avant arrêt forcé après SIGTERM |
 
 La chaîne de connexion du verrou doit être une vraie session PostgreSQL : pas de PgBouncer en mode `transaction`.
+
+Les planifications sont déclaratives, y compris avec le JobStore `Postgres` : au démarrage de `serve`, un job du groupe Quartz `batch` absent de `Batch:Schedules` est supprimé des tables `qrtz_`, avec ses triggers. Ce groupe appartient à la configuration : n'y créez pas de jobs à la main. Pendant un déploiement progressif, un nœud resté sur l'ancienne configuration peut encore déclencher une planification retirée, jusqu'à son redémarrage.
+
+Une expression cron illisible ou un fuseau inconnu bloque le démarrage avec le code 78 et un message qui donne un exemple valide.
 
 ## Supervision SQL
 

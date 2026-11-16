@@ -1,4 +1,5 @@
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Quartz;
 
@@ -53,6 +54,9 @@ public sealed class BatchSchedule
 
 public static class QuartzHostingExtensions
 {
+    /// <summary>Groupe Quartz des planifications issues de la configuration. Réservé : voir <see cref="StaleScheduleCleanup"/>.</summary>
+    public const string JobGroup = "batch";
+
     /// <summary>
     /// Ajoute Quartz et transforme chaque entrée de <c>Batch:Schedules</c> en job + trigger.
     /// Les planifications sont déclaratives : modifier un horaire ne demande aucune recompilation.
@@ -94,7 +98,7 @@ public static class QuartzHostingExtensions
 
             foreach (var schedule in schedules)
             {
-                var jobKey = new JobKey(schedule.Name, "batch");
+                var jobKey = new JobKey(schedule.Name, JobGroup);
                 var timeZone = schedule.TimeZone is null
                     ? TimeZoneInfo.Utc
                     : TimeZoneInfo.FindSystemTimeZoneById(schedule.TimeZone); // validé plus haut
@@ -115,11 +119,14 @@ public static class QuartzHostingExtensions
                 var cron = ParseCron(schedule.Cron)!; // validé plus haut
                 q.AddTrigger<QuartzBatchJob>(trigger => trigger
                     .ForJob(jobKey)
-                    .WithIdentity($"{schedule.Name}-trigger", "batch")
+                    .WithIdentity($"{schedule.Name}-trigger", JobGroup)
                     .WithSchedule(CronScheduleBuilder.Create(cron).InTimeZone(timeZone)));
             }
         });
 
+        // Avant le service hébergé de Quartz : les planifications retirées disparaissent avant tout déclenchement.
+        builder.Services.AddSingleton(new ConfiguredSchedules(schedules.Select(s => s.Name).ToHashSet(StringComparer.Ordinal)));
+        builder.Services.AddHostedService<StaleScheduleCleanup>();
         builder.AddQuartzHostedService(o => o.WaitForJobsToComplete = true);
         return builder;
     }
