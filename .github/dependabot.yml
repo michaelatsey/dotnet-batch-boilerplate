@@ -21,3 +21,6 @@ updates:
     directory: /src/Batch.Host
     schedule:
       interval: monthly
+    ignore:
+      # Le SDK se monte à la main, en même temps que global.json et les lockfiles (voir README).
+      - dependency-name: "dotnet/sdk"
